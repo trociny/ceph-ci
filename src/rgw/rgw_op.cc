@@ -1339,6 +1339,7 @@ void RGWGetObj::execute()
   RGWGetObj_CB cb(this);
   RGWGetDataCB* filter = (RGWGetDataCB*)&cb;
   boost::optional<RGWGetObj_Decompress> decompress;
+  RGWGetDataCB* decrypt = nullptr;
   map<string, bufferlist>::iterator attr_iter;
 
   perfcounter->inc(l_rgw_get);
@@ -1401,6 +1402,13 @@ void RGWGetObj::execute()
     s->obj_size = cs_info.orig_size;
     decompress.emplace(s->cct, &cs_info, partial_content, filter);
     filter = &*decompress;
+  }
+  op_ret = this->get_decrypt_filter(&decrypt, filter);
+  if (decrypt != nullptr) {
+    filter = decrypt;
+  }
+  if (op_ret < 0) {
+    goto done_err;
   }
 
   // for range requests with obj size 0
@@ -1476,10 +1484,12 @@ void RGWGetObj::execute()
   if (op_ret < 0) {
     goto done_err;
   }
+  delete decrypt;
   return;
 
 done_err:
   send_response_data_error();
+  delete decrypt;
 }
 
 int RGWGetObj::init_common()
