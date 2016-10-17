@@ -480,6 +480,15 @@ enum {
 
 const char *ceph_osd_alloc_hint_flag_name(int f);
 
+enum {
+	CEPH_OSD_BACKOFF_OP_BLOCK_PG = 1,
+	CEPH_OSD_BACKOFF_OP_UNBLOCK_PG = 2,
+	CEPH_OSD_BACKOFF_OP_BLOCK_OID = 3,
+	CEPH_OSD_BACKOFF_OP_UNBLOCK_OID = 4,
+};
+
+const char *ceph_osd_backoff_op_name(int op);
+
 /*
  * an individual object operation.  each may be accompanied by some data
  * payload
