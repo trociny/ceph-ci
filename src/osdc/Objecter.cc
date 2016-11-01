@@ -2750,7 +2750,7 @@ int Objecter::_calc_target(op_target_t *t, epoch_t *last_force_resend,
 			       &acting, &acting_primary);
   bool sort_bitwise = osdmap->test_flag(CEPH_OSDMAP_SORTBITWISE);
   unsigned prev_seed = ceph_stable_mod(pgid.ps(), t->pg_num, t->pg_num_mask);
-  if (any_change && pg_interval_t::is_new_interval(
+  if (pg_interval_t::is_new_interval(
 	t->acting_primary,
 	acting_primary,
 	t->acting,
@@ -2768,7 +2768,9 @@ int Objecter::_calc_target(op_target_t *t, epoch_t *last_force_resend,
 	t->sort_bitwise,
 	sort_bitwise,
 	pg_t(prev_seed, pgid.pool(), pgid.preferred()))) {
-    force_resend = true;
+    t->same_interval_since = osdmap->get_epoch();
+    if (any_change)
+      force_resend = true;
   }
 
   bool need_resend = false;

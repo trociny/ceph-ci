@@ -1175,6 +1175,7 @@ public:
     bool precalc_pgid; ///< true if we are directed at base_pgid, not base_oid
     pg_t base_pgid; ///< explciti pg target, if any
 
+    epoch_t same_interval_since;  ///< epoch of last interval change
     pg_t pgid; ///< last pg we mapped to
     unsigned pg_num; ///< last pg_num we mapped to
     unsigned pg_num_mask; ///< last pg_num_mask we mapped to
@@ -1197,6 +1198,7 @@ public:
 	base_oid(oid),
 	base_oloc(oloc),
 	precalc_pgid(false),
+	same_interval_since(0),
 	pg_num(0),
 	pg_num_mask(0),
 	up_primary(-1),
