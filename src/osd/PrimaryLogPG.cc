@@ -553,9 +553,25 @@ void PrimaryLogPG::wait_for_unreadable_object(
 {
   assert(is_unreadable_object(soid));
 
+  bool backoff = false;
+  if (missing_loc.is_unfound(soid) &&
+      op->get_req()->get_type() == CEPH_MSG_OSD_OP) {
+    MOSDOp *osdop = reinterpret_cast<MOSDOp*>(op->get_req());
+    SessionRef session((Session *)osdop->get_connection()->get_priv());
+    if (!session)
+      return;  // drop it.
+    session->put();  // get_priv takes a ref, and so does the SessionRef
+    if (session->con->has_feature(CEPH_FEATURE_RADOS_BACKOFF)) {
+      add_oid_backoff(session, soid, osdop->get_tid(),
+		      osdop->get_retry_attempt());
+      backoff = true;
+    }
+  }
   maybe_kick_recovery(soid);
-  waiting_for_unreadable_object[soid].push_back(op);
-  op->mark_delayed("waiting for missing object");
+  if (!backoff) {
+    waiting_for_unreadable_object[soid].push_back(op);
+    op->mark_delayed("waiting for missing object");
+  }
 }
 
 void PrimaryLogPG::wait_for_all_missing(OpRequestRef op)
@@ -9693,6 +9709,8 @@ void PrimaryLogPG::finish_degraded_object(const hobject_t& oid)
   if (i != objects_blocked_on_degraded_snap.end() &&
       i->second == oid.snap)
     objects_blocked_on_degraded_snap.erase(i);
+
+  release_oid_backoffs(oid);
 }
 
 void PrimaryLogPG::_committed_pushed_object(
