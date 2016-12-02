@@ -1611,6 +1611,25 @@ void PrimaryLogPG::do_request(
     return;
   }
 
+  if (op->get_req()->get_type() == CEPH_MSG_OSD_OP) {
+    bool backoff =
+      is_down() ||
+      is_incomplete() ||
+      (!is_active() && is_peered());
+    if (backoff) {
+      MOSDOp *osdop = reinterpret_cast<MOSDOp*>(op->get_req());
+      osdop->finish_decode();
+      SessionRef session((Session *)osdop->get_connection()->get_priv());
+      if (!session)
+	return;  // drop it.
+      session->put();  // get_priv takes a ref, and so does the SessionRef
+      if (session->con->has_feature(CEPH_FEATURE_RADOS_BACKOFF)) {
+	add_pg_backoff(session, osdop->get_tid(), osdop->get_retry_attempt());
+	return;
+      }
+    }
+  }
+
   if (!is_peered()) {
     // Delay unless PGBackend says it's ok
     if (pgbackend->can_handle_while_inactive(op)) {
