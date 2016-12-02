@@ -1862,6 +1862,7 @@ void PG::activate(ObjectStore::Transaction& t,
     }
 
     state_set(PG_STATE_ACTIVATING);
+    release_pg_backoffs();
   }
   if (is_primary()) {
     projected_last_update = info.last_update;
