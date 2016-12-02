@@ -2387,6 +2387,11 @@ void PG::split_into(pg_t child_pgid, PG *child, unsigned split_bits)
   dirty_big_info = true;
 }
 
+
+void PG::rm_backoff(BackoffRef b)
+{
+}
+
 void PG::clear_recovery_state() 
 {
   dout(10) << "clear_recovery_state" << dendl;

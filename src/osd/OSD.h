@@ -1498,6 +1498,8 @@ private:
       clear_session_waiting_on_pg(session, i->first);
     }    
 
+    session->clear_backoffs();
+
     /* Messages have connection refs, we need to clear the
      * connection->session->message->connection
      * cycles which result.
@@ -1545,6 +1547,7 @@ private:
       pgs->insert(i->first);
     }
   }
+
 
 private:
   /**

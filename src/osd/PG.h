@@ -34,6 +34,7 @@
 #include "osd_types.h"
 #include "include/xlist.h"
 #include "SnapMapper.h"
+#include "Session.h"
 
 #include "PGLog.h"
 #include "OSDMap.h"
@@ -1074,6 +1075,8 @@ public:
 
   friend class C_OSD_RepModify_Commit;
 
+
+  void rm_backoff(BackoffRef b);
 
   // -- scrub --
   struct Scrubber {
