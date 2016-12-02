@@ -47,6 +47,7 @@
 #include "messages/MOSDECSubOpReadReply.h"
 #include "messages/MOSDPGUpdateLogMissing.h"
 #include "messages/MOSDPGUpdateLogMissingReply.h"
+#include "messages/MOSDBackoff.h"
 
 #include "messages/MOSDSubOp.h"
 #include "messages/MOSDRepOp.h"
@@ -247,6 +248,7 @@ PG::PG(OSDService *o, OSDMapRef curmap,
   pg_stats_publish_valid(false),
   osr(osd->osr_registry.lookup_or_create(p, (stringify(p)))),
   finish_sync_event(NULL),
+  backoff_lock("PG::backoff_lock"),
   scrub_after_recovery(false),
   active_pushes(0),
   recovery_state(this),
@@ -2387,9 +2389,205 @@ void PG::split_into(pg_t child_pgid, PG *child, unsigned split_bits)
   dirty_big_info = true;
 }
 
+void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
+{
+  Mutex::Locker l(backoff_lock);
+  Backoff *b;
+  {
+    Mutex::Locker l(s->backoff_lock);
+    auto p = s->pg_backoffs.find(info.pgid.pgid);
+    if (p != s->pg_backoffs.end()) {
+      dout(10) << __func__ << " session " << s << " tid " << tid
+	       << " attempt " << attempt
+	       << " had " << p->second << dendl;
+      assert(p->second->first_tid <= tid);
+      return;
+    }
+    b = new Backoff(this, s, info.pgid.pgid, tid, attempt);
+    s->pg_backoffs[info.pgid.pgid] = b;
+    dout(10) << __func__ << " session " << s << " tid " << tid
+	     << " attempt " << attempt
+	     << " added " << b << dendl;
+  }
+  pg_backoffs.insert(b);
+  s->con->send_message(
+    new MOSDBackoff(
+      CEPH_OSD_BACKOFF_OP_BLOCK_PG,
+      info.pgid.pgid,
+      hobject_t(),
+      tid,
+      attempt,
+      get_osdmap()->get_epoch()));
+}
+
+void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
+			 uint32_t attempt)
+{
+  Mutex::Locker l(backoff_lock);
+  Backoff *b;
+  {
+    Mutex::Locker l(s->backoff_lock);
+    auto p = s->oid_backoffs.find(oid);
+    if (p != s->oid_backoffs.end()) {
+      dout(10) << __func__ << " session " << s << " oid " << oid
+	       << " tid " << tid << " attempt " << attempt
+	       << " had " << p->second << dendl;
+      assert(tid >= p->second->first_tid);
+      return;
+    }
+    b = new Backoff(this, s, oid, tid, attempt);
+    s->oid_backoffs[oid] = b;
+    dout(10) << __func__ << " session " << s << " oid " << oid
+	     << " tid " << tid << " attempt " << attempt
+	     << " added " << b << dendl;
+  }
+  oid_backoffs[oid].insert(b);
+  s->con->send_message(
+    new MOSDBackoff(
+      CEPH_OSD_BACKOFF_OP_BLOCK_OID,
+      info.pgid.pgid,
+      oid,
+      tid,
+      attempt,
+      get_osdmap()->get_epoch()));
+}
+
+void PG::release_pg_backoffs()
+{
+  set<BackoffRef> ls;
+  {
+    Mutex::Locker l(backoff_lock);
+    ls.swap(pg_backoffs);
+  }
+  for (auto& b : ls) {
+    Mutex::Locker l(b->lock);
+    dout(10) << __func__ << " " << b << " session " << b->session << dendl;
+    b->pg = nullptr;
+    if (b->session) {
+      b->session->con->send_message(
+	new MOSDBackoff(
+	  CEPH_OSD_BACKOFF_OP_UNBLOCK_PG,
+	  info.pgid.pgid,
+	  hobject_t(),
+	  b->first_tid,
+	  b->first_attempt,
+	  get_osdmap()->get_epoch()));
+      b->session->rm_backoff(b);
+    }
+  }
+}
+
+void PG::release_oid_backoffs()
+{
+  map<hobject_t,set<BackoffRef>,hobject_t::BitwiseComparator> m;
+  {
+    Mutex::Locker l(backoff_lock);
+    m.swap(oid_backoffs);
+  }
+  for (auto p = m.begin(); p != m.end(); ++p) {
+    for (auto& b : p->second) {
+      Mutex::Locker l(b->lock);
+      dout(10) << __func__ << " " << b << " session " << b->session
+	       << " oid " << p->first << dendl;
+      b->pg = nullptr;
+      if (b->session) {
+	b->session->con->send_message(
+	  new MOSDBackoff(
+	    CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
+	    info.pgid.pgid,
+	    *b->oid,
+	    b->first_tid,
+	    b->first_attempt,
+	    get_osdmap()->get_epoch()));
+	b->session->rm_backoff(b);
+      }
+    }
+  }
+  oid_backoffs.clear();
+}
+
+void PG::release_oid_backoffs(const hobject_t& oid)
+{
+  set<BackoffRef> ls;
+  {
+    Mutex::Locker l(backoff_lock);
+    auto p = oid_backoffs.find(oid);
+    if (p != oid_backoffs.end()) {
+      ls.swap(p->second);
+      oid_backoffs.erase(p);
+    }
+  }
+  for (auto& b : ls) {
+    Mutex::Locker l(b->lock);
+    dout(10) << __func__ << " " << b << " session " << b->session
+	     << " oid " << oid << dendl;
+    b->pg = nullptr;
+    if (b->session) {
+      b->session->con->send_message(
+	new MOSDBackoff(
+	  CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
+	  info.pgid.pgid,
+	  *b->oid,
+	  b->first_tid,
+	  b->first_attempt,
+	  get_osdmap()->get_epoch()));
+      b->session->rm_backoff(b);
+    }
+  }
+}
+
+void PG::clear_backoffs()
+{
+  set<BackoffRef> ls;
+  map<hobject_t,set<BackoffRef>,hobject_t::BitwiseComparator> m;
+  {
+    Mutex::Locker l(backoff_lock);
+    ls.swap(pg_backoffs);
+    m.swap(oid_backoffs);
+  }
+  for (auto& b : ls) {
+    Mutex::Locker l(b->lock);
+    dout(10) << __func__ << " " << b << " session " << b->session << dendl;
+    assert(b->pg == this);
+    b->pg = nullptr;
+    if (b->session) {
+      b->session->rm_backoff(b);
+    }
+  }
+  for (auto& p : m) {
+    for (auto& b : p.second) {
+      Mutex::Locker l(b->lock);
+      dout(10) << __func__ << " " << b << " session " << b->session
+	       << " oid " << p.first << dendl;
+      assert(b->pg == this);
+      b->pg = nullptr;
+      if (b->session) {
+	b->session->rm_backoff(b);
+      }
+    }
+  }
+}
 
 void PG::rm_backoff(BackoffRef b)
 {
+  Mutex::Locker l(backoff_lock);
+  if (b->pg) {
+    assert(b->pg == this);
+    b->pg = nullptr;
+    if (b->oid) {
+      auto p = oid_backoffs.find(*b->oid);
+      assert(p != oid_backoffs.end());
+      auto q = p->second.find(b);
+      p->second.erase(q);
+      if (p->second.empty()) {
+	oid_backoffs.erase(p);
+      }
+    } else {
+      auto p = pg_backoffs.find(b);
+      assert(p != pg_backoffs.end());
+      pg_backoffs.erase(p);
+    }
+  }
 }
 
 void PG::clear_recovery_state() 
