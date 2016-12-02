@@ -1632,6 +1632,11 @@ void PrimaryLogPG::do_request(
       is_down() ||
       is_incomplete() ||
       (!is_active() && is_peered());
+    if (g_conf->osd_peering_aggressive_backoff && !backoff) {
+      if (is_peering()) {
+	backoff = true;
+      }
+    }
     if (backoff) {
       MOSDOp *osdop = reinterpret_cast<MOSDOp*>(op->get_req());
       osdop->finish_decode();
