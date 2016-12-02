@@ -967,6 +967,13 @@ void PG::clear_primary_state()
 
   missing_loc.clear();
 
+  if (is_primary()) {
+    release_pg_backoffs();
+    release_oid_backoffs();
+  } else {
+    clear_backoffs();
+  }
+
   pg_log.reset_recovery_pointers();
 
   scrubber.reserved_peers.clear();
