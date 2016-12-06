@@ -1211,6 +1211,12 @@ public:
 	osd(-1)
     {}
 
+    pg_t effective_pgid() {
+      pg_t p = pgid;
+      p.m_seed = ceph_stable_mod(p.ps(), pg_num, pg_num_mask);
+      return p;
+    }
+
     void dump(Formatter *f) const;
   };
 
@@ -1742,6 +1748,13 @@ public:
   };
 
   // -- osd sessions --
+  struct OSDBackoff {
+    epoch_t epoch;
+    ceph_tid_t first_tid;
+    uint32_t first_attempt;
+    list<Op*> ops;
+  };
+
   struct OSDSession : public RefCountedObject {
     boost::shared_mutex lock;
     using lock_guard = std::lock_guard<decltype(lock)>;
@@ -1753,6 +1766,10 @@ public:
     map<ceph_tid_t,Op*> ops;
     map<uint64_t, LingerOp*> linger_ops;
     map<ceph_tid_t,CommandOp*> command_ops;
+
+    // backoffs
+    map<pg_t,OSDBackoff> pg_backoffs;
+    map<hobject_t,OSDBackoff,hobject_t::BitwiseComparator> oid_backoffs;
 
     int osd;
     int incarnation;
@@ -2042,6 +2059,7 @@ private:
   }
 
   void handle_osd_op_reply(class MOSDOpReply *m);
+  void handle_osd_backoff(class MOSDBackoff *m);
   void handle_watch_notify(class MWatchNotify *m);
   void handle_osd_map(class MOSDMap *m);
   void wait_for_osd_map();

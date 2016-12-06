@@ -24,6 +24,7 @@
 #include "messages/MPing.h"
 #include "messages/MOSDOp.h"
 #include "messages/MOSDOpReply.h"
+#include "messages/MOSDBackoff.h"
 #include "messages/MOSDMap.h"
 
 #include "messages/MPoolOp.h"
@@ -973,6 +974,10 @@ bool Objecter::ms_dispatch(Message *m)
     handle_osd_op_reply(static_cast<MOSDOpReply*>(m));
     return true;
 
+  case CEPH_MSG_OSD_BACKOFF:
+    handle_osd_backoff(static_cast<MOSDBackoff*>(m));
+    return true;
+
   case CEPH_MSG_WATCH_NOTIFY:
     handle_watch_notify(static_cast<MWatchNotify*>(m));
     m->put();
@@ -1085,6 +1090,52 @@ void Objecter::_scan_requests(OSDSession *s,
     case RECALC_OP_TARGET_POOL_DNE:
       _check_op_pool_dne(op, sl);
       break;
+    }
+  }
+
+  // check backoffs, too
+  auto bp = s->pg_backoffs.begin();
+  while (bp != s->pg_backoffs.end()) {
+    pg_t pgid = bp->first;
+    OSDBackoff& b = bp->second;
+    ldout(cct, 10) << " pg backoff " << pgid << dendl;
+    ++bp;
+    auto p = b.ops.begin();
+    while (p != b.ops.end()) {
+      Op *op = *p;
+      ldout(cct, 10) << " checking op " << op->tid << dendl;
+      bool force_resend_writes = cluster_full;
+      if (pool_full_map)
+	force_resend_writes = force_resend_writes ||
+	  (*pool_full_map)[op->target.base_oloc.pool];
+      int r = _calc_target(&op->target, &op->last_force_resend);
+      switch (r) {
+      case RECALC_OP_TARGET_NO_ACTION:
+	if (!force_resend &&
+	    (!force_resend_writes ||
+	     !(op->target.flags & CEPH_OSD_FLAG_WRITE))) {
+	  ++p; // no change
+	  break;
+	}
+	// -- fall-thru --
+      case RECALC_OP_TARGET_NEED_RESEND:
+	s->ops[op->tid] = op;
+	p = b.ops.erase(p);
+	if (op->session) {
+	  _session_op_remove(op->session, op);
+	}
+	need_resend[op->tid] = op;
+	_op_cancel_map_check(op);
+	break;
+      case RECALC_OP_TARGET_POOL_DNE:
+	s->ops[op->tid] = op;
+	p = b.ops.erase(p);
+	_check_op_pool_dne(op, sl);
+	break;
+      }
+    }
+    if (b.ops.empty()) {
+      s->pg_backoffs.erase(pgid);
     }
   }
 
@@ -2386,7 +2437,31 @@ void Objecter::_op_submit(Op *op, shunique_lock& sul, ceph_tid_t *ptid)
   _session_op_assign(s, op);
 
   if (need_send) {
-    _send_op(op, m);
+    // pg or oid backoff?
+    pg_t actual = op->target.effective_pgid();
+    auto p = s->pg_backoffs.find(actual);
+    if (p != s->pg_backoffs.end()) {
+      ldout(cct, 10) << " pg backoff on " << actual << ", queuing "
+		     << op << " tid " << op->tid << dendl;
+      p->second.ops.push_back(op);
+    } else {
+      hobject_t hoid(
+	op->target.target_oid,
+	op->target.target_oloc.key,
+	op->snapid,
+	op->target.pgid.ps(),
+	op->target.pgid.pool(),
+	op->target.target_oloc.nspace);
+      auto q = s->oid_backoffs.find(hoid);
+      if (q != s->oid_backoffs.end()) {
+	ldout(cct, 10) << " oid backoff on " << hoid << ", queuing "
+		       << op << " tid " << op->tid << dendl;
+	p->second.ops.push_back(op);
+      } else {
+	// no backoff, send!
+	_send_op(op, m);
+      }
+    }
   }
 
   // Last chance to touch Op here, after giving up session lock it can
@@ -3423,6 +3498,150 @@ void Objecter::handle_osd_op_reply(MOSDOpReply *m)
   put_session(s);
 }
 
+void Objecter::handle_osd_backoff(MOSDBackoff *m)
+{
+  ldout(cct, 10) << __func__ << " " << *m << dendl;
+  shunique_lock sul(rwlock, ceph::acquire_shared);
+  if (!initialized.read()) {
+    m->put();
+    return;
+  }
+
+  ConnectionRef con = m->get_connection();
+  OSDSession *s = static_cast<OSDSession*>(con->get_priv());
+  if (!s || s->con != con) {
+    ldout(cct, 7) << __func__ << " no session on con " << con << dendl;
+    m->put();
+    return;
+  }
+
+  get_session(s);
+  s->put();  // from get_priv() above
+
+  OSDSession::unique_lock sl(s->lock);
+
+  // make sure backoff matches the current incarnation of the given request
+  bool ignore = true;
+  Op *op = nullptr;
+  OSDBackoff *b = nullptr;
+  if (m->op == CEPH_OSD_BACKOFF_OP_BLOCK_PG ||
+      m->op == CEPH_OSD_BACKOFF_OP_BLOCK_OID) {
+    auto opi = s->ops.find(m->first_tid);
+    if (opi != s->ops.end()) {
+      op = opi->second;
+      if (op->session == s &&
+	  (op->attempts - 1) == (int)m->first_attempt) {
+	ldout(cct, 20) << __func__ << " request " << op << " on "
+		       << op->target.pgid << dendl;
+	assert(op->target.effective_pgid() == m->pgid);
+	ignore = false;;
+      } else {
+	ldout(cct, 20) << __func__ << " request doesn't match, dropping" << dendl;
+      }
+    } else {
+      ldout(cct, 20) << __func__ << " request not found, dropping" << dendl;
+    }
+  } else if (m->op == CEPH_OSD_BACKOFF_OP_UNBLOCK_PG) {
+    auto bi = s->pg_backoffs.find(m->pgid);
+    if (bi != s->pg_backoffs.end() &&
+	bi->second.first_tid == m->first_tid &&
+	bi->second.first_attempt == m->first_attempt) {
+      ignore = false;
+      b = &bi->second;
+    } else {
+      ldout(cct, 20) << __func__ << " backoff not found, dropping" << dendl;
+    }
+  } else if (m->op == CEPH_OSD_BACKOFF_OP_UNBLOCK_OID) {
+    auto bi = s->oid_backoffs.find(m->oid);
+    if (bi != s->oid_backoffs.end() &&
+	bi->second.first_tid == m->first_tid &&
+	bi->second.first_attempt == m->first_attempt) {
+      ignore = false;
+      b = &bi->second;
+    } else {
+      ldout(cct, 20) << __func__ << " backoff not found, dropping" << dendl;
+    }
+  } else {
+    ignore = true;
+  }
+  if (ignore) {
+    m->put();
+    put_session(s);
+    return;
+  }
+
+  switch (m->op) {
+  case CEPH_OSD_BACKOFF_OP_BLOCK_PG:
+    {
+      OSDBackoff& b = s->pg_backoffs[m->pgid];
+      b.epoch = m->osd_epoch;
+      b.first_tid = m->first_tid;
+      b.first_attempt = m->first_attempt;
+      auto p = s->ops.lower_bound(m->first_tid);
+      while (p != s->ops.end()) {
+	if (p->second->target.effective_pgid() == m->pgid) {
+	  ldout(cct, 20) << __func__ << "  tid " << p->first
+			 << " op " << p->second << dendl;
+	  b.ops.push_back(p->second);
+	  p = s->ops.erase(p);
+	} else {
+	  ++p;
+	}
+      }
+    }
+    break;
+
+  case CEPH_OSD_BACKOFF_OP_UNBLOCK_PG:
+    assert(b);
+    for (auto& op : b->ops) {
+      logger->inc(l_osdc_op_resend);
+      _send_op(op);
+      s->ops[op->tid] = op;
+    }
+    s->pg_backoffs.erase(m->pgid);
+    break;
+
+  case CEPH_OSD_BACKOFF_OP_BLOCK_OID:
+    {
+      OSDBackoff& b = s->oid_backoffs[m->oid];
+      b.epoch = m->osd_epoch;
+      b.first_tid = m->first_tid;
+      b.first_attempt = m->first_attempt;
+      auto p = s->ops.lower_bound(m->first_tid);
+      while (p != s->ops.end()) {
+	if (p->second->target.effective_pgid() == m->pgid &&
+	    p->second->target.target_oid == m->oid.oid) {
+	  ldout(cct, 20) << __func__ << "  tid " << p->first
+			 << " op " << p->second << dendl;
+	  b.ops.push_back(p->second);
+	  p = s->ops.erase(p);
+	} else {
+	  ++p;
+	}
+      }
+    }
+    break;
+
+  case CEPH_OSD_BACKOFF_OP_UNBLOCK_OID:
+    assert(b);
+    for (auto& op : b->ops) {
+      logger->inc(l_osdc_op_resend);
+      _send_op(op);
+      s->ops[op->tid] = op;
+    }
+    s->oid_backoffs.erase(m->oid);
+    break;
+
+  default:
+    ldout(cct, 10) << __func__ << " unrecognized op " << (int)m->op << dendl;
+  }
+
+  sul.unlock();
+  sl.unlock();
+
+  m->put();
+  put_session(s);
+}
 
 uint32_t Objecter::list_nobjects_seek(NListContext *list_context,
 				      uint32_t pos)
