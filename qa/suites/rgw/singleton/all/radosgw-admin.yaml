@@ -14,4 +14,3 @@ tasks:
 - rgw:
     client.0:
 - radosgw-admin:
-    master_client: client.0
