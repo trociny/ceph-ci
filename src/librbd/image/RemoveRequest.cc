@@ -623,9 +623,11 @@ template<typename I>
 Context *RemoveRequest<I>::handle_dir_remove_image(int *result) {
   ldout(m_cct, 20) << ":r =" << *result << dendl;
 
-  if ((*result < 0) && (*result != -ENOENT)) {
-    lderr(m_cct) << "error removing image from v2 directory: "
-                 << cpp_strerror(*result) << dendl;
+  if (*result < 0) {
+    if (*result != -ENOENT) {
+      lderr(m_cct) << "error removing image from v2 directory: "
+		   << cpp_strerror(*result) << dendl;
+    }
     return m_on_finish;
   }
 
