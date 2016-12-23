@@ -3531,12 +3531,14 @@ void Objecter::handle_osd_backoff(MOSDBackoff *m)
       op = opi->second;
       if (op->session == s &&
 	  (op->attempts - 1) == (int)m->first_attempt) {
+	// note: pgid might not match if there was a split
 	ldout(cct, 20) << __func__ << " request " << op << " on "
-		       << op->target.pgid << dendl;
-	assert(op->target.effective_pgid() == m->pgid);
+		       << op->target.pgid << " (effective pgid "
+		       << op->target.effective_pgid() << ")" << dendl;
 	ignore = false;;
       } else {
-	ldout(cct, 20) << __func__ << " request doesn't match, dropping" << dendl;
+	ldout(cct, 20) << __func__ << " request doesn't match, dropping"
+		       << dendl;
       }
     } else {
       ldout(cct, 20) << __func__ << " request not found, dropping" << dendl;
