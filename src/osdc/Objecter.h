@@ -1273,8 +1273,10 @@ public:
 
     osd_reqid_t reqid; // explicitly setting reqid
 
-    Op(const object_t& o, const object_locator_t& ol, vector<OSDOp>& op,
+    Op(CephContext *cct,
+       const object_t& o, const object_locator_t& ol, vector<OSDOp>& op,
        int f, Context *ac, Context *co, version_t *ov, int *offset = NULL) :
+      RefCountedObject(cct),
       session(NULL), incarnation(0),
       target(o, ol, f),
       con(NULL),
@@ -2177,7 +2179,7 @@ public:
     ceph::real_time mtime, int flags, Context *onack,
     Context *oncommit, version_t *objver = NULL,
     osd_reqid_t reqid = osd_reqid_t()) {
-    Op *o = new Op(oid, oloc, op.ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, op.ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->priority = op.priority;
     o->mtime = mtime;
@@ -2205,7 +2207,7 @@ public:
     Context *onack, version_t *objver = NULL,
     int *data_offset = NULL,
     uint64_t features = 0) {
-    Op *o = new Op(oid, oloc, op.ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, op.ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, onack, NULL, objver, data_offset);
     o->priority = op.priority;
     o->snapid = snapid;
@@ -2237,7 +2239,7 @@ public:
     ObjectOperation& op, bufferlist *pbl, int flags,
     Context *onack, epoch_t *reply_epoch,
     int *ctx_budget) {
-    Op *o = new Op(object_t(), oloc,
+    Op *o = new Op(cct, object_t(), oloc,
 		   op.ops, flags | global_op_flags.read() | CEPH_OSD_FLAG_READ,
 		   onack, NULL, NULL);
     o->target.precalc_pgid = true;
@@ -2325,7 +2327,7 @@ public:
     int i = init_ops(ops, 1, extra_ops);
     ops[i].op.op = CEPH_OSD_OP_STAT;
     C_Stat *fin = new C_Stat(psize, pmtime, onfinish);
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, fin, 0, objver);
     o->snapid = snap;
     o->outbl = &fin->bl;
@@ -2356,7 +2358,7 @@ public:
     ops[i].op.extent.truncate_size = 0;
     ops[i].op.extent.truncate_seq = 0;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, onfinish, 0, objver);
     o->snapid = snap;
     o->outbl = pbl;
@@ -2388,7 +2390,7 @@ public:
     ops[i].op.extent.truncate_size = trunc_size;
     ops[i].op.extent.truncate_seq = trunc_seq;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, onfinish, 0, objver);
     o->snapid = snap;
     o->outbl = pbl;
@@ -2407,7 +2409,7 @@ public:
     ops[i].op.extent.length = len;
     ops[i].op.extent.truncate_size = 0;
     ops[i].op.extent.truncate_seq = 0;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, onfinish, 0, objver);
     o->snapid = snap;
     o->outbl = pbl;
@@ -2426,7 +2428,7 @@ public:
     ops[i].op.xattr.value_len = 0;
     if (name)
       ops[i].indata.append(name);
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, onfinish, 0, objver);
     o->snapid = snap;
     o->outbl = pbl;
@@ -2443,7 +2445,7 @@ public:
     int i = init_ops(ops, 1, extra_ops);
     ops[i].op.op = CEPH_OSD_OP_GETXATTRS;
     C_GetAttrs *fin = new C_GetAttrs(attrset, onfinish);
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_READ, fin, 0, objver);
     o->snapid = snap;
     o->outbl = &fin->bl;
@@ -2467,7 +2469,7 @@ public:
 		     const SnapContext& snapc, int flags,
 		     Context *onack, Context *oncommit,
 		     version_t *objver = NULL) {
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2490,7 +2492,7 @@ public:
     ops[i].op.extent.truncate_seq = 0;
     ops[i].indata = bl;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2523,7 +2525,7 @@ public:
     ops[i].op.extent.truncate_size = 0;
     ops[i].op.extent.truncate_seq = 0;
     ops[i].indata = bl;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2558,7 +2560,7 @@ public:
     ops[i].op.extent.truncate_seq = trunc_seq;
     ops[i].indata = bl;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2579,7 +2581,7 @@ public:
     ops[i].op.extent.length = bl.length();
     ops[i].indata = bl;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2613,7 +2615,7 @@ public:
     ops[i].op.writesame.data_length = bl.length();
     ops[i].indata = bl;
     ops[i].op.flags = op_flags;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2646,7 +2648,7 @@ public:
     ops[i].op.extent.offset = trunc_size;
     ops[i].op.extent.truncate_size = trunc_size;
     ops[i].op.extent.truncate_seq = trunc_seq;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2663,7 +2665,7 @@ public:
     ops[i].op.op = CEPH_OSD_OP_ZERO;
     ops[i].op.extent.offset = off;
     ops[i].op.extent.length = len;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2680,7 +2682,7 @@ public:
     int i = init_ops(ops, 1, extra_ops);
     ops[i].op.op = CEPH_OSD_OP_ROLLBACK;
     ops[i].op.snap.snapid = snapid;
-    Op *o = new Op(oid, oloc, ops, CEPH_OSD_FLAG_WRITE, onack, oncommit,
+    Op *o = new Op(cct, oid, oloc, ops, CEPH_OSD_FLAG_WRITE, onack, oncommit,
 		   objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2697,7 +2699,7 @@ public:
     int i = init_ops(ops, 1, extra_ops);
     ops[i].op.op = CEPH_OSD_OP_CREATE;
     ops[i].op.flags = create_flags;
-    Op *o = new Op(oid, oloc, ops, global_flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, global_flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2713,7 +2715,7 @@ public:
     vector<OSDOp> ops;
     int i = init_ops(ops, 1, extra_ops);
     ops[i].op.op = CEPH_OSD_OP_DELETE;
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2744,7 +2746,7 @@ public:
     if (name)
       ops[i].indata.append(name);
     ops[i].indata.append(bl);
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;
@@ -2764,7 +2766,7 @@ public:
     ops[i].op.xattr.value_len = 0;
     if (name)
       ops[i].indata.append(name);
-    Op *o = new Op(oid, oloc, ops, flags | global_op_flags.read() |
+    Op *o = new Op(cct, oid, oloc, ops, flags | global_op_flags.read() |
 		   CEPH_OSD_FLAG_WRITE, onack, oncommit, objver);
     o->mtime = mtime;
     o->snapc = snapc;

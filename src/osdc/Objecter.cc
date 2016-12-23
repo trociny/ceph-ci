@@ -554,7 +554,7 @@ void Objecter::_send_linger(LingerOp *info,
     oncommit = c;
   }
   watchl.unlock();
-  Op *o = new Op(info->target.base_oid, info->target.base_oloc,
+  Op *o = new Op(cct, info->target.base_oid, info->target.base_oloc,
 		 opv, info->target.flags | CEPH_OSD_FLAG_READ,
 		 NULL, NULL,
 		 info->pobjver);
@@ -690,7 +690,7 @@ void Objecter::_send_linger_ping(LingerOp *info)
   opv[0].op.watch.op = CEPH_OSD_WATCH_OP_PING;
   opv[0].op.watch.gen = info->register_gen;
   C_Linger_Ping *onack = new C_Linger_Ping(this, info);
-  Op *o = new Op(info->target.base_oid, info->target.base_oloc,
+  Op *o = new Op(cct, info->target.base_oid, info->target.base_oloc,
 		 opv, info->target.flags | CEPH_OSD_FLAG_READ,
 		 NULL, NULL, NULL);
   o->oncommit_sync = onack;
