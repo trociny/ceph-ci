@@ -1261,8 +1261,6 @@ int FileStore::version_stamp_is_valid(uint32_t *version)
   int ret = safe_read_file(basedir.c_str(), "store_version",
       bp.c_str(), bp.length());
   if (ret < 0) {
-    if (ret == -ENOENT)
-      return 0;
     return ret;
   }
   bufferlist bl;
@@ -1292,6 +1290,11 @@ int FileStore::upgrade()
   dout(1) << "upgrade" << dendl;
   uint32_t version;
   int r = version_stamp_is_valid(&version);
+
+  if (r == -ENOENT) {
+      derr << "The store_version file doesn't exist." << dendl;
+      return -EINVAL;
+  }
   if (r < 0)
     return r;
   if (r == 1)
@@ -3218,12 +3221,15 @@ more:
     last = extent++;
   }
   const bool is_last = last->fe_flags & FIEMAP_EXTENT_LAST;
-  free(fiemap);
   if (!is_last) {
     uint64_t xoffset = last->fe_logical + last->fe_length - offset;
     offset = last->fe_logical + last->fe_length;
     len -= xoffset;
+    free(fiemap); /* fix clang warn: use-after-free */
     goto more;
+  }
+  else {
+    free(fiemap);
   }
 
   return r;
