@@ -465,21 +465,18 @@ bool BitMapZone::is_exhausted()
 
 bool BitMapZone::is_allocated(int64_t start_block, int64_t num_blocks)
 {
-  BmapEntry *bmap = NULL;
-  int bit = 0;
+  BmapEntry *bmap = &(*m_bmap_list)[start_block / BmapEntry::size()];
+  int bit = start_block % BmapEntry::size();
   int64_t falling_in_bmap = 0;
 
   while (num_blocks) {
-    bit = start_block % BmapEntry::size();
-    bmap = &(*m_bmap_list)[start_block / BmapEntry::size()];
     falling_in_bmap = MIN(num_blocks, BmapEntry::size() - bit);
-
     if (!bmap->is_allocated(bit, falling_in_bmap)) {
       return false;
     }
-
-    start_block += falling_in_bmap;
     num_blocks -= falling_in_bmap;
+    bit = 0;
+    bmap++;
   }
 
   return true;
@@ -487,46 +484,40 @@ bool BitMapZone::is_allocated(int64_t start_block, int64_t num_blocks)
 
 void BitMapZone::set_blocks_used(int64_t start_block, int64_t num_blocks)
 {
-  BmapEntry *bmap = NULL;
-  int bit = 0;
+  BmapEntry *bmap = &(*m_bmap_list)[start_block / BmapEntry::size()];
+  int bit = start_block % BmapEntry::size();
   int64_t falling_in_bmap = 0;
   int64_t blks = num_blocks;
 
   while (blks) {
-    bit = start_block % BmapEntry::size();
-    bmap = &(*m_bmap_list)[start_block / BmapEntry::size()];
     falling_in_bmap = MIN(blks, BmapEntry::size() - bit);
-
     bmap->set_bits(bit, falling_in_bmap);
-
-    start_block += falling_in_bmap;
     blks -= falling_in_bmap;
+    bit = 0;
+    bmap++;
   }
   add_used_blocks(num_blocks);
 }
 
 void BitMapZone::free_blocks_int(int64_t start_block, int64_t num_blocks)
 {
-  BmapEntry *bmap = NULL;
-  int bit = 0;
+  if (num_blocks == 0) {
+    return;
+  }
+
+  BmapEntry *bmap = &(*m_bmap_list)[start_block / BmapEntry::size()];
+  int bit = start_block % BmapEntry::size();
   int64_t falling_in_bmap = 0;
   int64_t count = num_blocks;
-  int64_t first_blk = start_block;
   
-  if (num_blocks == 0) {
-    return; 
-  }
   alloc_dbg_assert(is_allocated(start_block, num_blocks));
 
   while (count) {
-    bit = first_blk % BmapEntry::size();
-    bmap = &(*m_bmap_list)[first_blk / BmapEntry::size()];
     falling_in_bmap = MIN(count, BmapEntry::size() - bit);
-
     bmap->clear_bits(bit, falling_in_bmap);
-
-    first_blk += falling_in_bmap;
     count -= falling_in_bmap;
+    bit = 0;
+    bmap++;
   }
   alloc_dbg_assert(!is_allocated(start_block, num_blocks));
 }
