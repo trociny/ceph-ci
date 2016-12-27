@@ -2405,19 +2405,32 @@ void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
     Mutex::Locker l(s->backoff_lock);
     auto p = s->pg_backoffs.find(info.pgid.pgid);
     if (p != s->pg_backoffs.end()) {
+      b = p->second.get();
+      if (p->second->first_tid <= tid) {
+	dout(10) << __func__ << " session " << s << " tid " << tid
+		 << " attempt " << attempt
+		 << " had " << p->second << " first_tid " << b->first_tid
+		 << " first_attempt " << b->first_attempt
+		 << dendl;
+	return;	// all good
+      }
       dout(10) << __func__ << " session " << s << " tid " << tid
 	       << " attempt " << attempt
-	       << " had " << p->second << dendl;
-      assert(p->second->first_tid <= tid);
-      return;
+	       << " had " << p->second << " first_tid " << b->first_tid
+	       << " first_attempt " << b->first_attempt
+	       << ", adjusting down" << dendl;
+      // adjust first_tid
+      b->first_tid = tid;
+      b->first_attempt = attempt;
+    } else {
+      b = new Backoff(this, s, info.pgid.pgid, tid, attempt);
+      s->pg_backoffs[info.pgid.pgid] = b;
+      dout(10) << __func__ << " session " << s << " tid " << tid
+	       << " attempt " << attempt
+	       << " added " << b << dendl;
+      pg_backoffs.insert(b);
     }
-    b = new Backoff(this, s, info.pgid.pgid, tid, attempt);
-    s->pg_backoffs[info.pgid.pgid] = b;
-    dout(10) << __func__ << " session " << s << " tid " << tid
-	     << " attempt " << attempt
-	     << " added " << b << dendl;
   }
-  pg_backoffs.insert(b);
   s->con->send_message(
     new MOSDBackoff(
       CEPH_OSD_BACKOFF_OP_BLOCK_PG,
@@ -2440,6 +2453,7 @@ void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
       dout(10) << __func__ << " session " << s << " oid " << oid
 	       << " tid " << tid << " attempt " << attempt
 	       << " had " << p->second << dendl;
+#warning fixme for adjustments down, like with pg above
       assert(tid >= p->second->first_tid);
       return;
     }
