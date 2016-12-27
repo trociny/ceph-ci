@@ -1013,6 +1013,53 @@ bool Objecter::ms_dispatch(Message *m)
   return false;
 }
 
+bool Objecter::_check_request(
+  Op *op,
+  OSDSession *s,
+  OSDSession::unique_lock& sl,
+  bool force_resend,
+  bool cluster_full,
+  map<int64_t, bool> *pool_full_map,
+  OSDBackoff *b,
+  list<Op*>::iterator *biter,
+  map<ceph_tid_t, Op*>& need_resend)
+{
+  bool force_resend_writes = cluster_full;
+  if (pool_full_map)
+    force_resend_writes = force_resend_writes ||
+      (*pool_full_map)[op->target.base_oloc.pool];
+  int r = _calc_target(&op->target, &op->last_force_resend);
+  switch (r) {
+  case RECALC_OP_TARGET_NO_ACTION:
+    if (!force_resend &&
+	(!force_resend_writes || !(op->target.flags & CEPH_OSD_FLAG_WRITE))) {
+      return false;
+    }
+    // -- fall-thru --
+  case RECALC_OP_TARGET_NEED_RESEND:
+    if (b) {
+      // move from backoff to ops
+      s->ops[op->tid] = op;
+      *biter = b->ops.erase(*biter);
+    }
+    if (op->session) {
+      _session_op_remove(op->session, op);
+    }
+    need_resend[op->tid] = op;
+    _op_cancel_map_check(op);
+    break;
+  case RECALC_OP_TARGET_POOL_DNE:
+    if (b) {
+      // move from backoff to ops, just for _check_op_pool_dne's benefit
+      s->ops[op->tid] = op;
+      *biter = b->ops.erase(*biter);
+    }
+    _check_op_pool_dne(op, sl);
+    break;
+  }
+  return true;
+}
+
 void Objecter::_scan_requests(OSDSession *s,
 			      bool force_resend,
 			      bool cluster_full,
@@ -1069,28 +1116,8 @@ void Objecter::_scan_requests(OSDSession *s,
     Op *op = p->second;
     ++p;   // check_op_pool_dne() may touch ops; prevent iterator invalidation
     ldout(cct, 10) << " checking op " << op->tid << dendl;
-    bool force_resend_writes = cluster_full;
-    if (pool_full_map)
-      force_resend_writes = force_resend_writes ||
-	(*pool_full_map)[op->target.base_oloc.pool];
-    int r = _calc_target(&op->target, &op->last_force_resend);
-    switch (r) {
-    case RECALC_OP_TARGET_NO_ACTION:
-      if (!force_resend &&
-	  (!force_resend_writes || !(op->target.flags & CEPH_OSD_FLAG_WRITE)))
-	break;
-      // -- fall-thru --
-    case RECALC_OP_TARGET_NEED_RESEND:
-      if (op->session) {
-	_session_op_remove(op->session, op);
-      }
-      need_resend[op->tid] = op;
-      _op_cancel_map_check(op);
-      break;
-    case RECALC_OP_TARGET_POOL_DNE:
-      _check_op_pool_dne(op, sl);
-      break;
-    }
+    _check_request(op, s, sl, force_resend, cluster_full, pool_full_map,
+		   nullptr, nullptr, need_resend);
   }
 
   // check backoffs, too
@@ -1098,44 +1125,39 @@ void Objecter::_scan_requests(OSDSession *s,
   while (bp != s->pg_backoffs.end()) {
     pg_t pgid = bp->first;
     OSDBackoff& b = bp->second;
-    ldout(cct, 10) << " pg backoff " << pgid << dendl;
+    ldout(cct, 10) << " pg backoff " << pgid << " " << bp->second.ops << dendl;
     ++bp;
     auto p = b.ops.begin();
     while (p != b.ops.end()) {
       Op *op = *p;
-      ldout(cct, 10) << " checking op " << op->tid << dendl;
-      bool force_resend_writes = cluster_full;
-      if (pool_full_map)
-	force_resend_writes = force_resend_writes ||
-	  (*pool_full_map)[op->target.base_oloc.pool];
-      int r = _calc_target(&op->target, &op->last_force_resend);
-      switch (r) {
-      case RECALC_OP_TARGET_NO_ACTION:
-	if (!force_resend &&
-	    (!force_resend_writes ||
-	     !(op->target.flags & CEPH_OSD_FLAG_WRITE))) {
-	  ++p; // no change
-	  break;
-	}
-	// -- fall-thru --
-      case RECALC_OP_TARGET_NEED_RESEND:
-	s->ops[op->tid] = op;
-	p = b.ops.erase(p);
-	if (op->session) {
-	  _session_op_remove(op->session, op);
-	}
-	need_resend[op->tid] = op;
-	_op_cancel_map_check(op);
-	break;
-      case RECALC_OP_TARGET_POOL_DNE:
-	s->ops[op->tid] = op;
-	p = b.ops.erase(p);
-	_check_op_pool_dne(op, sl);
-	break;
+      ldout(cct, 10) << "  checking backoff op " << op->tid << dendl;
+      if (!_check_request(op, s, sl, force_resend, cluster_full, pool_full_map,
+			  &b, &p, need_resend)) {
+	++p;
       }
     }
     if (b.ops.empty()) {
       s->pg_backoffs.erase(pgid);
+    }
+  }
+
+  auto obp = s->oid_backoffs.begin();
+  while (obp != s->oid_backoffs.end()) {
+    hobject_t oid = obp->first;
+    OSDBackoff& b = obp->second;
+    ldout(cct, 10) << " oid backoff " << oid << " " << obp->second.ops << dendl;
+    ++obp;
+    auto p = b.ops.begin();
+    while (p != b.ops.end()) {
+      Op *op = *p;
+      ldout(cct, 10) << "  checking backoff op " << op->tid << dendl;
+      if (!_check_request(op, s, sl, force_resend, cluster_full, pool_full_map,
+			  &b, &p, need_resend)) {
+	++p;
+      }
+    }
+    if (b.ops.empty()) {
+      s->oid_backoffs.erase(oid);
     }
   }
 

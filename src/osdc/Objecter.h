@@ -2027,6 +2027,15 @@ private:
   void set_honor_osdmap_full() { honor_osdmap_full = true; }
   void unset_honor_osdmap_full() { honor_osdmap_full = false; }
 
+  bool _check_request(Op *op,
+		      OSDSession *s,
+		      OSDSession::unique_lock& sl,
+		      bool force_resend,
+		      bool cluster_full,
+		      map<int64_t, bool> *pool_full_map,
+		      OSDBackoff *b,
+		      list<Op*>::iterator *biter,
+		      map<ceph_tid_t, Op*>& need_resend);
   void _scan_requests(OSDSession *s,
 		      bool force_resend,
 		      bool cluster_full,
