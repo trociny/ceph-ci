@@ -2465,6 +2465,7 @@ void Objecter::_op_submit(Op *op, shunique_lock& sul, ceph_tid_t *ptid)
     if (p != s->pg_backoffs.end()) {
       ldout(cct, 10) << " pg backoff on " << actual << ", queuing "
 		     << op << " tid " << op->tid << dendl;
+      s->ops.erase(op->tid);
       p->second.ops.push_back(op);
     } else {
       hobject_t hoid(
