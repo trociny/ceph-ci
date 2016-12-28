@@ -1754,7 +1754,7 @@ public:
     epoch_t epoch;
     ceph_tid_t first_tid;
     uint32_t first_attempt;
-    list<Op*> ops;
+    map<ceph_tid_t,Op*> ops;
   };
 
   struct OSDSession : public RefCountedObject {
@@ -2034,7 +2034,7 @@ private:
 		      bool cluster_full,
 		      map<int64_t, bool> *pool_full_map,
 		      OSDBackoff *b,
-		      list<Op*>::iterator *biter,
+		      map<ceph_tid_t, Op*>::iterator *biter,
 		      map<ceph_tid_t, Op*>& need_resend);
   void _scan_requests(OSDSession *s,
 		      bool force_resend,

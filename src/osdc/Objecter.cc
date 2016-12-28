@@ -1021,7 +1021,7 @@ bool Objecter::_check_request(
   bool cluster_full,
   map<int64_t, bool> *pool_full_map,
   OSDBackoff *b,
-  list<Op*>::iterator *biter,
+  map<ceph_tid_t,Op*>::iterator *biter,
   map<ceph_tid_t, Op*>& need_resend)
 {
   bool force_resend_writes = cluster_full;
@@ -1129,7 +1129,7 @@ void Objecter::_scan_requests(OSDSession *s,
     ++bp;
     auto p = b.ops.begin();
     while (p != b.ops.end()) {
-      Op *op = *p;
+      Op *op = p->second;
       ldout(cct, 10) << "  checking backoff op " << op->tid << dendl;
       if (!_check_request(op, s, sl, force_resend, cluster_full, pool_full_map,
 			  &b, &p, need_resend)) {
@@ -1149,7 +1149,7 @@ void Objecter::_scan_requests(OSDSession *s,
     ++obp;
     auto p = b.ops.begin();
     while (p != b.ops.end()) {
-      Op *op = *p;
+      Op *op = p->second;
       ldout(cct, 10) << "  checking backoff op " << op->tid << dendl;
       if (!_check_request(op, s, sl, force_resend, cluster_full, pool_full_map,
 			  &b, &p, need_resend)) {
@@ -2466,7 +2466,7 @@ void Objecter::_op_submit(Op *op, shunique_lock& sul, ceph_tid_t *ptid)
       ldout(cct, 10) << " pg backoff on " << actual << ", queuing "
 		     << op << " tid " << op->tid << dendl;
       s->ops.erase(op->tid);
-      p->second.ops.push_back(op);
+      p->second.ops[op->tid] = op;
     } else {
       hobject_t hoid(
 	op->target.target_oid,
@@ -2479,7 +2479,7 @@ void Objecter::_op_submit(Op *op, shunique_lock& sul, ceph_tid_t *ptid)
       if (q != s->oid_backoffs.end()) {
 	ldout(cct, 10) << " oid backoff on " << hoid << ", queuing "
 		       << op << " tid " << op->tid << dendl;
-	p->second.ops.push_back(op);
+	p->second.ops[op->tid] = op;
       } else {
 	// no backoff, send!
 	_send_op(op, m);
@@ -3607,7 +3607,7 @@ void Objecter::handle_osd_backoff(MOSDBackoff *m)
 	if (p->second->target.effective_pgid() == m->pgid) {
 	  ldout(cct, 20) << __func__ << "  tid " << p->first
 			 << " op " << p->second << dendl;
-	  b.ops.push_back(p->second);
+	  b.ops[p->first] = p->second;
 	  p = s->ops.erase(p);
 	} else {
 	  ++p;
@@ -3618,10 +3618,10 @@ void Objecter::handle_osd_backoff(MOSDBackoff *m)
 
   case CEPH_OSD_BACKOFF_OP_UNBLOCK_PG:
     assert(b);
-    for (auto& op : b->ops) {
+    for (auto& p : b->ops) {
       logger->inc(l_osdc_op_resend);
-      _send_op(op);
-      s->ops[op->tid] = op;
+      _send_op(p.second);
+      s->ops[p.first] = p.second;
     }
     s->pg_backoffs.erase(m->pgid);
     break;
@@ -3638,7 +3638,7 @@ void Objecter::handle_osd_backoff(MOSDBackoff *m)
 	    p->second->target.target_oid == m->oid.oid) {
 	  ldout(cct, 20) << __func__ << "  tid " << p->first
 			 << " op " << p->second << dendl;
-	  b.ops.push_back(p->second);
+	  b.ops[p->first] = p->second;
 	  p = s->ops.erase(p);
 	} else {
 	  ++p;
@@ -3649,10 +3649,10 @@ void Objecter::handle_osd_backoff(MOSDBackoff *m)
 
   case CEPH_OSD_BACKOFF_OP_UNBLOCK_OID:
     assert(b);
-    for (auto& op : b->ops) {
+    for (auto& p : b->ops) {
       logger->inc(l_osdc_op_resend);
-      _send_op(op);
-      s->ops[op->tid] = op;
+      _send_op(p.second);
+      s->ops[p.first] = p.second;
     }
     s->oid_backoffs.erase(m->oid);
     break;
