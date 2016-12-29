@@ -2031,6 +2031,20 @@ void Objecter::_kick_requests(OSDSession *session,
 {
   // rwlock is locked unique
 
+  // requeue backoff ops
+  for (auto& p : session->pg_backoffs) {
+    for (auto& q : p.second.ops) {
+      session->ops[q.first] = q.second;
+    }
+  }
+  session->pg_backoffs.clear();
+  for (auto& p : session->oid_backoffs) {
+    for (auto& q : p.second.ops) {
+      session->ops[q.first] = q.second;
+    }
+  }
+  session->oid_backoffs.clear();
+
   // resend ops
   map<ceph_tid_t,Op*> resend;  // resend in tid order
   for (map<ceph_tid_t, Op*>::iterator p = session->ops.begin();
