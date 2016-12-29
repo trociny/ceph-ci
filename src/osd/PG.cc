@@ -2476,6 +2476,7 @@ void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
 
 void PG::release_pg_backoffs()
 {
+  dout(10) << __func__ << " " << dendl;
   set<BackoffRef> ls;
   {
     Mutex::Locker l(backoff_lock);
@@ -2501,6 +2502,7 @@ void PG::release_pg_backoffs()
 
 void PG::release_oid_backoffs()
 {
+  dout(10) << __func__ << " " << dendl;
   map<hobject_t,set<BackoffRef>,hobject_t::BitwiseComparator> m;
   {
     Mutex::Locker l(backoff_lock);
@@ -2530,6 +2532,7 @@ void PG::release_oid_backoffs()
 
 void PG::release_oid_backoffs(const hobject_t& oid)
 {
+  dout(10) << __func__ << " " << oid << dendl;
   set<BackoffRef> ls;
   {
     Mutex::Locker l(backoff_lock);
@@ -2560,6 +2563,7 @@ void PG::release_oid_backoffs(const hobject_t& oid)
 
 void PG::clear_backoffs()
 {
+  dout(10) << __func__ << " " << dendl;
   set<BackoffRef> ls;
   map<hobject_t,set<BackoffRef>,hobject_t::BitwiseComparator> m;
   {
@@ -2592,6 +2596,7 @@ void PG::clear_backoffs()
 
 void PG::rm_backoff(BackoffRef b)
 {
+  dout(10) << __func__ << " " << b << dendl;
   Mutex::Locker l(backoff_lock);
   if (b->pg) {
     assert(b->pg == this);
