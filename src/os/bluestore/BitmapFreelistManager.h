@@ -28,6 +28,16 @@ class BitmapFreelistManager : public FreelistManager {
   uint64_t key_mask;    ///< mask to convert offset to key offset
 
   bufferlist all_set_bl;
+  uint8_t byte_bit_mask[8] = {
+    0x01,
+    0x02,
+    0x04,
+    0x08,
+    0x10,
+    0x20,
+    0x40,
+    0x80
+  };
 
   KeyValueDB::Iterator enumerate_p;
   uint64_t enumerate_offset; ///< logical offset; position
@@ -38,6 +48,8 @@ class BitmapFreelistManager : public FreelistManager {
     return key_off + bit * bytes_per_block;
   }
 
+  int _get_next_clear_bit(bufferlist& bl, int start);
+  int _get_next_set_bit(bufferlist& bl, int start);
   void _init_misc();
 
   void _verify_range(uint64_t offset, uint64_t length, int val);

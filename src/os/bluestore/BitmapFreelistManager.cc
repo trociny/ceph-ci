@@ -184,14 +184,14 @@ void BitmapFreelistManager::enumerate_reset()
   enumerate_bl.clear();
 }
 
-int get_next_clear_bit(bufferlist& bl, int start)
+int BitmapFreelistManager::_get_next_clear_bit(bufferlist& bl, int start)
 {
   const char *p = bl.c_str();
   int bits = bl.length() << 3;
   while (start < bits) {
-    int byte = start >> 3;
-    unsigned char mask = 1 << (start & 7);
-    if ((p[byte] & mask) == 0) {
+    int which_byte = start / 8;
+    int which_bit = start % 8;
+    if ((p[which_byte] & byte_bit_mask[which_bit]) == 0) {
       return start;
     }
     ++start;
@@ -199,14 +199,14 @@ int get_next_clear_bit(bufferlist& bl, int start)
   return -1; // not found
 }
 
-int get_next_set_bit(bufferlist& bl, int start)
+int BitmapFreelistManager::_get_next_set_bit(bufferlist& bl, int start)
 {
   const char *p = bl.c_str();
   int bits = bl.length() << 3;
   while (start < bits) {
-    int byte = start >> 3;
-    unsigned char mask = 1 << (start & 7);
-    if (p[byte] & mask) {
+    int which_byte = start / 8;
+    int which_bit = start % 8;
+    if (p[which_byte] & byte_bit_mask[which_bit]) {
       return start;
     }
     ++start;
@@ -231,7 +231,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
     _key_decode_u64(p, &enumerate_offset);
     enumerate_bl = enumerate_p->value();
     assert(enumerate_offset == 0);
-    assert(get_next_set_bit(enumerate_bl, 0) == 0);
+    assert(_get_next_set_bit(enumerate_bl, 0) == 0);
   }
 
   if (enumerate_offset >= size) {
@@ -241,7 +241,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
 
   // skip set bits to find offset
   while (true) {
-    enumerate_bl_pos = get_next_clear_bit(enumerate_bl, enumerate_bl_pos);
+    enumerate_bl_pos = _get_next_clear_bit(enumerate_bl, enumerate_bl_pos);
     if (enumerate_bl_pos >= 0) {
       *offset = _get_offset(enumerate_offset, enumerate_bl_pos);
       dout(30) << __func__ << " found clear bit, key 0x" << std::hex
@@ -278,7 +278,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
   uint64_t end = 0;
   if (enumerate_p->valid()) {
     while (true) {
-      enumerate_bl_pos = get_next_set_bit(enumerate_bl, enumerate_bl_pos);
+      enumerate_bl_pos = _get_next_set_bit(enumerate_bl, enumerate_bl_pos);
       if (enumerate_bl_pos >= 0) {
 	end = _get_offset(enumerate_offset, enumerate_bl_pos);
 	dout(30) << __func__ << " found set bit, key 0x" << std::hex
