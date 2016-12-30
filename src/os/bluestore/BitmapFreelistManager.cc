@@ -113,33 +113,32 @@ int BitmapFreelistManager::init()
 
   // load meta
   while (it->valid()) {
-    string k = it->key();
-    if (k == "bytes_per_block") {
+    if (it->key() == "bytes_per_block") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(bytes_per_block, p);
       dout(10) << __func__ << " bytes_per_block 0x" << std::hex
 	       << bytes_per_block << std::dec << dendl;
-    } else if (k == "blocks") {
+    } else if (it->key() == "blocks") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(blocks, p);
       dout(10) << __func__ << " blocks 0x" << std::hex << blocks << std::dec
 	       << dendl;
-    } else if (k == "size") {
+    } else if (it->key() == "size") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(size, p);
       dout(10) << __func__ << " size 0x" << std::hex << size << std::dec
 	       << dendl;
-    } else if (k == "blocks_per_key") {
+    } else if (it->key() == "blocks_per_key") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(blocks_per_key, p);
       dout(10) << __func__ << " blocks_per_key 0x" << std::hex << blocks_per_key
 	       << std::dec << dendl;
     } else {
-      derr << __func__ << " unrecognized meta " << k << dendl;
+      derr << __func__ << " unrecognized meta " << it->key() << dendl;
       return -EIO;
     }
     it->next();
@@ -226,9 +225,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
     // we assert that the first block is always allocated; it's true,
     // and it simplifies our lives a bit.
     assert(enumerate_p->valid());
-    string k = enumerate_p->key();
-    const char *p = k.c_str();
-    _key_decode_u64(p, &enumerate_offset);
+    _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
     enumerate_bl = enumerate_p->value();
     assert(enumerate_offset == 0);
     assert(_get_next_set_bit(enumerate_bl, 0) == 0);
@@ -260,10 +257,8 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
       *offset = _get_offset(enumerate_offset, enumerate_bl_pos);
       break;
     }
-    string k = enumerate_p->key();
-    const char *p = k.c_str();
     uint64_t next = enumerate_offset + bytes_per_key;
-    _key_decode_u64(p, &enumerate_offset);
+    _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
     enumerate_bl = enumerate_p->value();
     enumerate_bl_pos = 0;
     if (enumerate_offset > next) {
@@ -299,9 +294,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
       if (!enumerate_p->valid()) {
 	break;
       }
-      string k = enumerate_p->key();
-      const char *p = k.c_str();
-      _key_decode_u64(p, &enumerate_offset);
+      _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
       enumerate_bl = enumerate_p->value();
     }
   }
