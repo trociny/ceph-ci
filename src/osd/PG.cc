@@ -2399,6 +2399,9 @@ void PG::split_into(pg_t child_pgid, PG *child, unsigned split_bits)
 
 void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
 {
+  ConnectionRef con = s->con;
+  if (!con)   // OSD::ms_handle_reset clears s->con without a lock
+    return;
   Mutex::Locker l(backoff_lock);
   Backoff *b;
   {
@@ -2431,7 +2434,7 @@ void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
       pg_backoffs.insert(b);
     }
   }
-  s->con->send_message(
+  con->send_message(
     new MOSDBackoff(
       CEPH_OSD_BACKOFF_OP_BLOCK_PG,
       info.pgid.pgid,
@@ -2444,6 +2447,9 @@ void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
 void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
 			 uint32_t attempt)
 {
+  ConnectionRef con = s->con;
+  if (!con)   // OSD::ms_handle_reset clears s->con without a lock
+    return;
   Mutex::Locker l(backoff_lock);
   Backoff *b;
   {
@@ -2464,7 +2470,7 @@ void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
 	     << " added " << b << dendl;
   }
   oid_backoffs[oid].insert(b);
-  s->con->send_message(
+  con->send_message(
     new MOSDBackoff(
       CEPH_OSD_BACKOFF_OP_BLOCK_OID,
       info.pgid.pgid,
@@ -2487,14 +2493,17 @@ void PG::release_pg_backoffs()
     dout(10) << __func__ << " " << b << " session " << b->session << dendl;
     if (b->session) {
       assert(b->pg == this);
-      b->session->con->send_message(
-	new MOSDBackoff(
-	  CEPH_OSD_BACKOFF_OP_UNBLOCK_PG,
-	  info.pgid.pgid,
-	  hobject_t(),
-	  b->first_tid,
-	  b->first_attempt,
-	  get_osdmap()->get_epoch()));
+      ConnectionRef con = b->session->con;
+      if (con) {   // OSD::ms_handle_reset clears s->con without a lock
+	con->send_message(
+	  new MOSDBackoff(
+	    CEPH_OSD_BACKOFF_OP_UNBLOCK_PG,
+	    info.pgid.pgid,
+	    hobject_t(),
+	    b->first_tid,
+	    b->first_attempt,
+	    get_osdmap()->get_epoch()));
+      }
       b->session->rm_backoff(b);
       b->session.reset();
       b->pg.reset();
@@ -2517,14 +2526,17 @@ void PG::release_oid_backoffs()
 	       << " oid " << p->first << dendl;
       if (b->session) {
 	assert(b->pg == this);
-	b->session->con->send_message(
-	  new MOSDBackoff(
-	    CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
-	    info.pgid.pgid,
-	    *b->oid,
-	    b->first_tid,
-	    b->first_attempt,
-	    get_osdmap()->get_epoch()));
+	ConnectionRef con = b->session->con;
+	if (con) {   // OSD::ms_handle_reset clears s->con without a lock
+	  con->send_message(
+	    new MOSDBackoff(
+	      CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
+	      info.pgid.pgid,
+	      *b->oid,
+	      b->first_tid,
+	      b->first_attempt,
+	      get_osdmap()->get_epoch()));
+	}
 	b->session->rm_backoff(b);
 	b->session.reset();
 	b->pg.reset();
@@ -2552,14 +2564,17 @@ void PG::release_oid_backoffs(const hobject_t& oid)
 	     << " oid " << oid << dendl;
     b->pg = nullptr;
     if (b->session) {
-      b->session->con->send_message(
-	new MOSDBackoff(
-	  CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
-	  info.pgid.pgid,
-	  *b->oid,
-	  b->first_tid,
-	  b->first_attempt,
-	  get_osdmap()->get_epoch()));
+      ConnectionRef con = b->session->con;
+      if (con) {   // OSD::ms_handle_reset clears s->con without a lock
+	con->send_message(
+	  new MOSDBackoff(
+	    CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
+	    info.pgid.pgid,
+	    *b->oid,
+	    b->first_tid,
+	    b->first_attempt,
+	    get_osdmap()->get_epoch()));
+      }
       b->session->rm_backoff(b);
     }
   }
