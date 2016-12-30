@@ -14,19 +14,23 @@ void Session::clear_backoffs()
     pg.swap(pg_backoffs);
   }
   for (auto& p : oid) {
-    Mutex::Locker l(p.second->lock);
-    assert(p.second->session == this);
-    p.second->session.reset();
-    if (p.second->pg) {
-      p.second->pg->rm_backoff(p.second);
+    Backoff *b = p.second.get();
+    Mutex::Locker l(b->lock);
+    if (b->pg) {
+      assert(b->session == this);
+      b->pg->rm_backoff(b);
+      b->pg.reset();
+      b->session.reset();
     }
   }
   for (auto& p : pg) {
-    Mutex::Locker l(p.second->lock);
-    assert(p.second->session == this);
-    p.second->session.reset();
-    if (p.second->pg) {
-      p.second->pg->rm_backoff(p.second);
+    Backoff *b = p.second.get();
+    Mutex::Locker l(b->lock);
+    if (b->pg) {
+      assert(b->session == this);
+      b->pg->rm_backoff(b);
+      b->pg.reset();
+      b->session.reset();
     }
   }
 }

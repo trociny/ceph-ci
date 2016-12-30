@@ -62,8 +62,9 @@ typedef boost::intrusive_ptr<PG> PGRef;
 
 struct Backoff : public RefCountedObject {
   Mutex lock;
-  PGRef pg;
-  SessionRef session;
+  // NOTE: the owning PG and session are either *both* set or both null.
+  PGRef pg;             ///< owning pg
+  SessionRef session;   ///< owning session
   boost::optional<pg_t> pgid;
   boost::optional<hobject_t> oid;
   ceph_tid_t first_tid = 0;
@@ -124,18 +125,21 @@ struct Session : public RefCountedObject {
     }
   }
 
+  // called by PG::release_*_backoffs and PG::clear_backoffs()
   void rm_backoff(BackoffRef b) {
     Mutex::Locker l(backoff_lock);
-    if (b->session) {
-      assert(b->session == this);
-      b->session.reset();
-      if (b->oid) {
-	auto p = oid_backoffs.find(*b->oid);
-	assert(p != oid_backoffs.end());
+    assert(b->lock.is_locked_by_me());
+    assert(b->session == this);
+    if (b->oid) {
+      auto p = oid_backoffs.find(*b->oid);
+      // may race with clear_backoffs()
+      if (p != oid_backoffs.end()) {
 	oid_backoffs.erase(p);
-      } else {
-	auto p = pg_backoffs.find(*b->pgid);
-	assert(p != pg_backoffs.end());
+      }
+    } else {
+      auto p = pg_backoffs.find(*b->pgid);
+      // may race with clear_backoffs()
+      if (p != pg_backoffs.end()) {
 	pg_backoffs.erase(p);
       }
     }

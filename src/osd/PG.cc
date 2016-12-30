@@ -2485,8 +2485,8 @@ void PG::release_pg_backoffs()
   for (auto& b : ls) {
     Mutex::Locker l(b->lock);
     dout(10) << __func__ << " " << b << " session " << b->session << dendl;
-    b->pg = nullptr;
     if (b->session) {
+      assert(b->pg == this);
       b->session->con->send_message(
 	new MOSDBackoff(
 	  CEPH_OSD_BACKOFF_OP_UNBLOCK_PG,
@@ -2496,6 +2496,8 @@ void PG::release_pg_backoffs()
 	  b->first_attempt,
 	  get_osdmap()->get_epoch()));
       b->session->rm_backoff(b);
+      b->session.reset();
+      b->pg.reset();
     }
   }
 }
@@ -2513,8 +2515,8 @@ void PG::release_oid_backoffs()
       Mutex::Locker l(b->lock);
       dout(10) << __func__ << " " << b << " session " << b->session
 	       << " oid " << p->first << dendl;
-      b->pg = nullptr;
       if (b->session) {
+	assert(b->pg == this);
 	b->session->con->send_message(
 	  new MOSDBackoff(
 	    CEPH_OSD_BACKOFF_OP_UNBLOCK_OID,
@@ -2524,6 +2526,8 @@ void PG::release_oid_backoffs()
 	    b->first_attempt,
 	    get_osdmap()->get_epoch()));
 	b->session->rm_backoff(b);
+	b->session.reset();
+	b->pg.reset();
       }
     }
   }
@@ -2574,10 +2578,11 @@ void PG::clear_backoffs()
   for (auto& b : ls) {
     Mutex::Locker l(b->lock);
     dout(10) << __func__ << " " << b << " session " << b->session << dendl;
-    assert(b->pg == this);
-    b->pg = nullptr;
     if (b->session) {
+      assert(b->pg == this);
       b->session->rm_backoff(b);
+      b->session.reset();
+      b->pg.reset();
     }
   }
   for (auto& p : m) {
@@ -2585,33 +2590,39 @@ void PG::clear_backoffs()
       Mutex::Locker l(b->lock);
       dout(10) << __func__ << " " << b << " session " << b->session
 	       << " oid " << p.first << dendl;
-      assert(b->pg == this);
-      b->pg = nullptr;
       if (b->session) {
+	assert(b->pg == this);
 	b->session->rm_backoff(b);
+	b->session.reset();
+	b->pg.reset();
       }
     }
   }
 }
 
+// called by Session::clear_backoffs()
 void PG::rm_backoff(BackoffRef b)
 {
   dout(10) << __func__ << " " << b << dendl;
   Mutex::Locker l(backoff_lock);
-  if (b->pg) {
-    assert(b->pg == this);
-    b->pg = nullptr;
-    if (b->oid) {
-      auto p = oid_backoffs.find(*b->oid);
-      assert(p != oid_backoffs.end());
+  assert(b->lock.is_locked_by_me());
+  assert(b->pg == this);
+  if (b->oid) {
+    auto p = oid_backoffs.find(*b->oid);
+    // may race with release_oid_backoffs()
+    if (p != oid_backoffs.end()) {
       auto q = p->second.find(b);
-      p->second.erase(q);
-      if (p->second.empty()) {
-	oid_backoffs.erase(p);
+      if (q != p->second.end()) {
+	p->second.erase(q);
+	if (p->second.empty()) {
+	  oid_backoffs.erase(p);
+	}
       }
-    } else {
-      auto p = pg_backoffs.find(b);
-      assert(p != pg_backoffs.end());
+    }
+  } else {
+    auto p = pg_backoffs.find(b);
+    // may race with release_pg_backoffs()
+    if (p != pg_backoffs.end()) {
       pg_backoffs.erase(p);
     }
   }
