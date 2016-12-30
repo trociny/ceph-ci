@@ -114,33 +114,32 @@ int BitmapFreelistManager::init()
 
   // load meta
   while (it->valid()) {
-    string k = it->key();
-    if (k == "bytes_per_block") {
+    if (it->key() == "bytes_per_block") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(bytes_per_block, p);
       dout(10) << __func__ << " bytes_per_block 0x" << std::hex
 	       << bytes_per_block << std::dec << dendl;
-    } else if (k == "blocks") {
+    } else if (it->key() == "blocks") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(blocks, p);
       dout(10) << __func__ << " blocks 0x" << std::hex << blocks << std::dec
 	       << dendl;
-    } else if (k == "size") {
+    } else if (it->key() == "size") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(size, p);
       dout(10) << __func__ << " size 0x" << std::hex << size << std::dec
 	       << dendl;
-    } else if (k == "blocks_per_key") {
+    } else if (it->key() == "blocks_per_key") {
       bufferlist bl = it->value();
       bufferlist::iterator p = bl.begin();
       ::decode(blocks_per_key, p);
       dout(10) << __func__ << " blocks_per_key 0x" << std::hex << blocks_per_key
 	       << std::dec << dendl;
     } else {
-      derr << __func__ << " unrecognized meta " << k << dendl;
+      derr << __func__ << " unrecognized meta " << it->key() << dendl;
       return -EIO;
     }
     it->next();
@@ -185,14 +184,14 @@ void BitmapFreelistManager::enumerate_reset()
   enumerate_bl.clear();
 }
 
-int get_next_clear_bit(bufferlist& bl, int start)
+int BitmapFreelistManager::_get_next_clear_bit(bufferlist& bl, int start)
 {
   const char *p = bl.c_str();
   int bits = bl.length() << 3;
   while (start < bits) {
-    int byte = start >> 3;
-    unsigned char mask = 1 << (start & 7);
-    if ((p[byte] & mask) == 0) {
+    int which_byte = start / 8;
+    int which_bit = start % 8;
+    if ((p[which_byte] & byte_bit_mask[which_bit]) == 0) {
       return start;
     }
     ++start;
@@ -200,14 +199,14 @@ int get_next_clear_bit(bufferlist& bl, int start)
   return -1; // not found
 }
 
-int get_next_set_bit(bufferlist& bl, int start)
+int BitmapFreelistManager::_get_next_set_bit(bufferlist& bl, int start)
 {
   const char *p = bl.c_str();
   int bits = bl.length() << 3;
   while (start < bits) {
-    int byte = start >> 3;
-    unsigned char mask = 1 << (start & 7);
-    if (p[byte] & mask) {
+    int which_byte = start / 8;
+    int which_bit = start % 8;
+    if (p[which_byte] & byte_bit_mask[which_bit]) {
       return start;
     }
     ++start;
@@ -227,12 +226,10 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
     // we assert that the first block is always allocated; it's true,
     // and it simplifies our lives a bit.
     assert(enumerate_p->valid());
-    string k = enumerate_p->key();
-    const char *p = k.c_str();
-    _key_decode_u64(p, &enumerate_offset);
+    _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
     enumerate_bl = enumerate_p->value();
     assert(enumerate_offset == 0);
-    assert(get_next_set_bit(enumerate_bl, 0) == 0);
+    assert(_get_next_set_bit(enumerate_bl, 0) == 0);
   }
 
   if (enumerate_offset >= size) {
@@ -242,9 +239,9 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
 
   // skip set bits to find offset
   while (true) {
-    enumerate_bl_pos = get_next_clear_bit(enumerate_bl, enumerate_bl_pos);
+    enumerate_bl_pos = _get_next_clear_bit(enumerate_bl, enumerate_bl_pos);
     if (enumerate_bl_pos >= 0) {
-      *offset = get_offset(enumerate_offset, enumerate_bl_pos);
+      *offset = _get_offset(enumerate_offset, enumerate_bl_pos);
       dout(30) << __func__ << " found clear bit, key 0x" << std::hex
 	       << enumerate_offset << " bit 0x" << enumerate_bl_pos
 	       << " offset 0x" << *offset
@@ -258,13 +255,11 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
     if (!enumerate_p->valid()) {
       enumerate_offset += bytes_per_key;
       enumerate_bl_pos = 0;
-      *offset = get_offset(enumerate_offset, enumerate_bl_pos);
+      *offset = _get_offset(enumerate_offset, enumerate_bl_pos);
       break;
     }
-    string k = enumerate_p->key();
-    const char *p = k.c_str();
     uint64_t next = enumerate_offset + bytes_per_key;
-    _key_decode_u64(p, &enumerate_offset);
+    _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
     enumerate_bl = enumerate_p->value();
     enumerate_bl_pos = 0;
     if (enumerate_offset > next) {
@@ -279,17 +274,17 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
   uint64_t end = 0;
   if (enumerate_p->valid()) {
     while (true) {
-      enumerate_bl_pos = get_next_set_bit(enumerate_bl, enumerate_bl_pos);
+      enumerate_bl_pos = _get_next_set_bit(enumerate_bl, enumerate_bl_pos);
       if (enumerate_bl_pos >= 0) {
-	end = get_offset(enumerate_offset, enumerate_bl_pos);
+	end = _get_offset(enumerate_offset, enumerate_bl_pos);
 	dout(30) << __func__ << " found set bit, key 0x" << std::hex
 		 << enumerate_offset << " bit 0x" << enumerate_bl_pos
 		 << " offset 0x" << end << std::dec
 		 << dendl;
 	*length = end - *offset;
-       assert((*offset  + *length) <= size);
-       dout(10) << __func__ << std::hex << " 0x" << *offset << "~" << *length
-		<< std::dec << dendl;
+        assert((*offset  + *length) <= size);
+        dout(10) << __func__ << std::hex << " 0x" << *offset << "~" << *length
+		 << std::dec << dendl;
 	return true;
       }
       dout(30) << " no more set bits in 0x" << std::hex << enumerate_offset
@@ -300,9 +295,7 @@ bool BitmapFreelistManager::enumerate_next(uint64_t *offset, uint64_t *length)
       if (!enumerate_p->valid()) {
 	break;
       }
-      string k = enumerate_p->key();
-      const char *p = k.c_str();
-      _key_decode_u64(p, &enumerate_offset);
+      _key_decode_u64(enumerate_p->key().c_str(), &enumerate_offset);
       enumerate_bl = enumerate_p->value();
     }
   }
