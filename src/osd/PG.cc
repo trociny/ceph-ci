@@ -2409,29 +2409,28 @@ void PG::add_pg_backoff(SessionRef s, ceph_tid_t tid, uint32_t attempt)
     auto p = s->pg_backoffs.find(info.pgid.pgid);
     if (p != s->pg_backoffs.end()) {
       b = p->second.get();
-      if (p->second->first_tid <= tid) {
+      if (b->first_tid <= tid) {
 	dout(10) << __func__ << " session " << s << " tid " << tid
 		 << " attempt " << attempt
-		 << " had " << p->second << " first_tid " << b->first_tid
+		 << " had " << b << " first_tid " << b->first_tid
 		 << " first_attempt " << b->first_attempt
 		 << dendl;
 	return;	// all good
       }
       dout(10) << __func__ << " session " << s << " tid " << tid
 	       << " attempt " << attempt
-	       << " had " << p->second << " first_tid " << b->first_tid
+	       << " had " << b << " first_tid " << b->first_tid
 	       << " first_attempt " << b->first_attempt
 	       << ", adjusting down" << dendl;
-      // adjust first_tid
       b->first_tid = tid;
       b->first_attempt = attempt;
     } else {
       b = new Backoff(this, s, info.pgid.pgid, tid, attempt);
       s->pg_backoffs[info.pgid.pgid] = b;
+      pg_backoffs.insert(b);
       dout(10) << __func__ << " session " << s << " tid " << tid
 	       << " attempt " << attempt
 	       << " added " << b << dendl;
-      pg_backoffs.insert(b);
     }
   }
   con->send_message(
@@ -2456,20 +2455,33 @@ void PG::add_oid_backoff(SessionRef s, const hobject_t& oid, ceph_tid_t tid,
     Mutex::Locker l(s->backoff_lock);
     auto p = s->oid_backoffs.find(oid);
     if (p != s->oid_backoffs.end()) {
+      b = p->second.get();
+      if (b->first_tid <= tid) {
+	dout(10) << __func__ << " session " << s << " oid " << oid
+		 << " tid " << tid
+		 << " attempt " << attempt
+		 << " had " << b << " first_tid " << b->first_tid
+		 << " first_attempt " << b->first_attempt
+		 << dendl;
+	return;	// all good
+      }
+      dout(10) << __func__ << " session " << s << " oid " << oid
+	       << " tid " << tid
+	       << " attempt " << attempt
+	       << " had " << b << " first_tid " << b->first_tid
+	       << " first_attempt " << b->first_attempt
+	       << ", adjusting down" << dendl;
+      b->first_tid = tid;
+      b->first_attempt = attempt;
+    } else {
+      b = new Backoff(this, s, oid, tid, attempt);
+      s->oid_backoffs[oid] = b;
+      oid_backoffs[oid].insert(b);
       dout(10) << __func__ << " session " << s << " oid " << oid
 	       << " tid " << tid << " attempt " << attempt
-	       << " had " << p->second << dendl;
-#warning fixme for adjustments down, like with pg above
-      assert(tid >= p->second->first_tid);
-      return;
+	       << " added " << b << dendl;
     }
-    b = new Backoff(this, s, oid, tid, attempt);
-    s->oid_backoffs[oid] = b;
-    dout(10) << __func__ << " session " << s << " oid " << oid
-	     << " tid " << tid << " attempt " << attempt
-	     << " added " << b << dendl;
   }
-  oid_backoffs[oid].insert(b);
   con->send_message(
     new MOSDBackoff(
       CEPH_OSD_BACKOFF_OP_BLOCK_OID,
