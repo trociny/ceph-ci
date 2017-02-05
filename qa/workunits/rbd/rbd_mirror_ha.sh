@@ -12,9 +12,7 @@ is_leader()
 
     test -n "${pool}" || pool=${POOL}
 
-    admin_daemon "${CLUSTER1}:${instance}" \
-		 rbd mirror status ${pool} ${CLUSTER2} |
-	grep '"leader": true'
+    is_pool_leader "${CLUSTER1}:${instance}" ${pool} ${CLUSTER2}
 }
 
 wait_for_leader()
@@ -37,11 +35,8 @@ wait_for_leader()
 release_leader()
 {
     local pool=$1
-    local cmd="rbd mirror leader release"
 
-    test -n "${pool}" && cmd="${cmd} ${pool} ${CLUSTER2}"
-
-    admin_daemon "${CLUSTER1}:${LEADER}" ${cmd}
+    release_pool_leader "${CLUSTER1}:${LEADER}" "${pool}" "${CLUSTER2}"
 }
 
 wait_for_leader_released()

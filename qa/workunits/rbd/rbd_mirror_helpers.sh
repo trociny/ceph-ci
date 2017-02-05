@@ -91,9 +91,11 @@ fi
 # by default.
 #
 # RBD_MIRROR_USE_EXISTING_CLUSTER - if set, do not start and stop ceph clusters
-# RBD_MIRROR_USE_RBD_MIRROR - if set, use an existing instance of rbd-mirror
-#                             running as ceph client $CEPH_ID. If empty,
-#                             this script will start and stop rbd-mirror
+# RBD_MIRROR_USE_RBD_MIRROR       - if set, use an existing instance of
+#                                   rbd-mirror running as ceph client $CEPH_ID.
+#                                   If empty, this script will start and stop
+#                                   rbd-mirror
+# RBD_MIRROR_REMOTE               - if set, rbd-mirror is not run on local host
 
 #
 # Functions
@@ -294,6 +296,8 @@ admin_daemon()
 {
     local cluster=$1 ; shift
     local instance
+
+    test -z "${RBD_MIRROR_REMOTE}"
 
     set_cluster_instance "${cluster}" cluster instance
 
@@ -498,6 +502,7 @@ wait_for_replay_complete()
     while true; do
         for s in 0.2 0.4 0.8 1.6 2 2 4 4 8 8 16 16 32 32; do
 	    sleep ${s}
+	    test -z "${RBD_MIRROR_REMOTE}" &&
 	    flush "${local_cluster}" "${pool}" "${image}"
 	    master_pos=$(get_master_position "${cluster}" "${pool}" "${image}")
 	    mirror_pos=$(get_mirror_position "${cluster}" "${pool}" "${image}")
@@ -847,6 +852,28 @@ request_resync_image()
     eval 'test -n "$'${image_id_var_name}'"'
 
     rbd --cluster=${cluster} -p ${pool} mirror image resync ${image}
+}
+
+is_pool_leader()
+{
+    local cluster=$1
+    local pool=$2
+    local peer=$3
+
+    admin_daemon "${cluster}" rbd mirror status "${pool}" "${peer}" |
+	grep '"leader": true'
+}
+
+release_pool_leader()
+{
+    local cluster=$1
+    local pool=$2
+    local peer=$3
+    local cmd="rbd mirror leader release"
+
+    test -n "${pool}" && cmd="${cmd} ${pool} ${peer}"
+
+    admin_daemon "${cluster}" ${cmd}
 }
 
 #
